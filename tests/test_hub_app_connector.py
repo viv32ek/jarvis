@@ -69,3 +69,25 @@ def test_personal_bot_blocks_work_command(tmp_path: Path) -> None:
     personal = JarvisOrchestrator(settings, fixed_mode="assistant")
     reply = asyncio.run(personal.chat("/work UNI-42"))
     assert "Jarvis Code" in reply
+
+
+def test_hub_decision_poller_deduplicates(tmp_path: Path) -> None:
+    from jarvis.scheduler import check_new_hub_decisions
+
+    settings = Settings.load(root_dir=tmp_path)
+    orch = JarvisOrchestrator(settings)
+
+    sample = HubResult(
+        True,
+        0,
+        data={"questions": [{"id": "q_1", "issueKey": "UNI-7", "question": "Approve schema?"}]},
+    )
+    with patch("jarvis.scheduler.HubAppClient.is_available", True), patch(
+        "jarvis.scheduler.HubAppClient.run_issues", return_value=sample
+    ):
+        first = check_new_hub_decisions(settings, orch.memory)
+        assert len(first) == 1 and first[0]["id"] == "q_1"
+
+        # Second check with same decision returns empty (no duplicate spam)
+        second = check_new_hub_decisions(settings, orch.memory)
+        assert second == []

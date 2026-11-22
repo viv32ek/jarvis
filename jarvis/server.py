@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncIterator
@@ -62,8 +63,10 @@ def create_app(
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         tg_bots: list[tuple[str, Any]] = []
+        poller_task: asyncio.Task[None] | None = None
         if enable_telegram:
-            from jarvis.telegram_bot import build_telegram_bots
+            from jarvis.scheduler import run_hub_decision_poller
+            from jarvis.telegram_bot import build_telegram_bots, parse_allowed_user_ids
 
             tg_bots = build_telegram_bots(
                 personal_orch,
@@ -71,17 +74,36 @@ def create_app(
                 settings=cfg,
                 bot_filter=telegram_bot_filter,
             )
+            personal_tg_app = None
             for role, tg_app in tg_bots:
                 await tg_app.initialize()
                 await tg_app.start()
                 if tg_app.updater is not None:
                     await tg_app.updater.start_polling()
                 active_telegram_roles.append(role)
+                if role == "personal":
+                    personal_tg_app = tg_app
                 label = "Jarvis Code" if role == "code" else "Jarvis"
                 print(f"{label} Telegram bot attached to Core Service.")
+
+            allowed_ids = parse_allowed_user_ids(cfg.telegram_allowed_user_id)
+            if personal_tg_app is not None and allowed_ids:
+                async def _notify_owner(message: str) -> None:
+                    for uid in allowed_ids:
+                        await personal_tg_app.bot.send_message(chat_id=uid, text=message)
+
+                poller_task = asyncio.create_task(
+                    run_hub_decision_poller(cfg, personal_orch.memory, _notify_owner)
+                )
         try:
             yield
         finally:
+            if poller_task is not None:
+                poller_task.cancel()
+                try:
+                    await poller_task
+                except asyncio.CancelledError:
+                    pass
             for _, tg_app in tg_bots:
                 if tg_app.updater is not None:
                     await tg_app.updater.stop()
