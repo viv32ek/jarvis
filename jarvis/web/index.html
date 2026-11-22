@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Jarvis — Self-Hosted Assistant</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="pulse" id="status-dot"></span>
+        <div>
+          <h1>JARVIS</h1>
+          <p class="subtitle" id="status-text">Connecting…</p>
+        </div>
+      </div>
+
+      <section class="panel">
+        <span class="panel-label">Mode</span>
+        <div class="mode-switch">
+          <button type="button" id="mode-assistant" class="mode-btn active">Assistant</button>
+          <button type="button" id="mode-code" class="mode-btn">Code Mode</button>
+        </div>
+
+        <div id="workspace-box" class="workspace-box hidden">
+          <label class="panel-label" for="workspace-input">Workspace Path</label>
+          <form id="workspace-form" class="inline-form">
+            <input id="workspace-input" type="text" placeholder="/home/vivek/..." autocomplete="off" />
+            <button type="submit" class="btn-small">Set</button>
+          </form>
+          <span class="guardrail-note">Auto edits · Staging deploys ask permission</span>
+        </div>
+
+        <label class="panel-label" for="model-select">Brain Model</label>
+        <select id="model-select">
+          <option value="gemini-3.8-flash-low">Gemini 3.8 Flash (Low · Fastest)</option>
+          <option value="gemini-3.8-flash-medium" selected>Gemini 3.8 Flash (Medium)</option>
+          <option value="gemini-3.8-flash-high">Gemini 3.8 Flash (High)</option>
+          <option value="gemini-4-neon-low">Gemini 4 Neon (Low)</option>
+          <option value="gemini-4-neon-medium">Gemini 4 Neon (Medium · Code Default)</option>
+          <option value="gemini-4-neon-high">Gemini 4 Neon (High)</option>
+          <option value="claude-sonnet-5-5-medium">Claude Sonnet 5.5 (Medium)</option>
+        </select>
+        <div class="row-actions">
+          <label class="toggle">
+            <input type="checkbox" id="tts-toggle" />
+            <span>Speak replies</span>
+          </label>
+          <button id="reset-btn" class="btn-ghost" title="Start a fresh conversation">New Chat</button>
+        </div>
+      </section>
+
+      <section class="panel grow">
+        <div class="panel-header">
+          <span class="panel-label">Pending Reminders</span>
+        </div>
+        <ul id="reminders-list" class="item-list"></ul>
+        <form id="reminder-form" class="inline-form">
+          <input id="reminder-input" type="text" placeholder="Add reminder…" autocomplete="off" />
+          <button type="submit" class="btn-small">+</button>
+        </form>
+      </section>
+
+      <section class="panel grow">
+        <div class="panel-header">
+          <span class="panel-label">Remembered Facts</span>
+        </div>
+        <ul id="facts-list" class="item-list"></ul>
+        <form id="fact-form" class="inline-form">
+          <input id="fact-input" type="text" placeholder="Save a fact…" autocomplete="off" />
+          <button type="submit" class="btn-small">+</button>
+        </form>
+      </section>
+    </aside>
+
+    <main class="chat-area">
+      <div id="messages" class="messages"></div>
+      <div id="tool-status" class="tool-status hidden"></div>
+
+      <form id="chat-form" class="composer">
+        <button type="button" id="mic-btn" class="btn-icon" title="Push to talk (browser mic)">🎙️</button>
+        <textarea id="chat-input" rows="1" placeholder="Ask Jarvis anything… (or /help)" autocomplete="off"></textarea>
+        <button type="submit" id="send-btn" class="btn-primary">Send</button>
+      </form>
+    </main>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
