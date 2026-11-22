@@ -66,6 +66,7 @@ def _serve(
     mode: str | None,
     project: str | None,
     enable_telegram: bool = False,
+    bot_filter: str = "all",
 ) -> int:
     try:
         import uvicorn
@@ -77,18 +78,17 @@ def _serve(
         )
         return 1
 
-    app = create_app(settings, enable_telegram=enable_telegram)
-    orch = app.state.orchestrator
-    if mode:
-        orch.brain.set_mode(mode)
+    app = create_app(settings, enable_telegram=enable_telegram, telegram_bot_filter=bot_filter)
     if project:
-        orch.brain.set_workspace(project)
+        app.state.code_orchestrator.brain.set_workspace(project)
     if model:
-        orch.brain.model = model
-    tg_note = " + Telegram" if enable_telegram else ""
+        target = app.state.code_orchestrator if mode == "code" else app.state.personal_orchestrator
+        target.brain.model = model
+    tg_note = f" + Telegram({bot_filter})" if enable_telegram else ""
     print(
         f"Starting Jarvis Core Service + Web UI{tg_note} at http://{host}:{port} "
-        f"(mode: {orch.brain.mode}, model: {orch.brain.model})"
+        f"(Personal: {app.state.personal_orchestrator.brain.model} | "
+        f"Code: {app.state.code_orchestrator.brain.model} @ {app.state.code_orchestrator.brain.workspace})"
     )
     uvicorn.run(app, host=host, port=port, log_level="info")
     return 0
@@ -99,9 +99,10 @@ def _run_telegram(
     model: str | None,
     mode: str | None,
     project: str | None,
+    bot_filter: str = "all",
 ) -> int:
     try:
-        from jarvis.telegram_bot import run_telegram_bot
+        from jarvis.telegram_bot import run_telegram_bots
     except ImportError as exc:
         sys.stderr.write(
             f"Telegram dependencies not installed ({exc}).\n"
@@ -109,16 +110,16 @@ def _run_telegram(
         )
         return 1
 
-    orch = JarvisOrchestrator(settings)
-    if mode:
-        orch.brain.set_mode(mode)
+    personal_orch = JarvisOrchestrator(settings, fixed_mode="assistant")
+    code_orch = JarvisOrchestrator(settings, fixed_mode="code")
     if project:
-        orch.brain.set_workspace(project)
+        code_orch.brain.set_workspace(project)
     if model:
-        orch.brain.model = model
+        target = code_orch if mode == "code" or bot_filter == "code" else personal_orch
+        target.brain.model = model
 
     try:
-        run_telegram_bot(orch, settings=settings)
+        run_telegram_bots(personal_orch, code_orch, settings=settings, bot_filter=bot_filter)
     except RuntimeError as exc:
         sys.stderr.write(f"Telegram bot error: {exc}\n")
         return 1
@@ -158,7 +159,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--model", help="Override the Antigravity model (e.g. gemini-4-neon-medium)")
     parser.add_argument("--reset", action="store_true", help="Reset conversation state before running")
     parser.add_argument("--serve", action="store_true", help="Start the FastAPI Core Service + Local Web UI")
-    parser.add_argument("--telegram", action="store_true", help="Start the free Telegram bot bridge")
+    parser.add_argument("--telegram", action="store_true", help="Start the free Telegram bot bridge(s)")
+    parser.add_argument("--bot", choices=["all", "personal", "code"], default="all", help="Which Telegram bot(s) to run")
     parser.add_argument("--voice", action="store_true", help="Start the local hands-free Voice Daemon")
     parser.add_argument("--push-to-talk", action="store_true", help="Use Enter-to-speak instead of wake word with --voice")
     parser.add_argument("--api-url", help="Connect --voice to a running Core Service (e.g. http://127.0.0.1:8765)")
@@ -177,6 +179,7 @@ def main(argv: list[str] | None = None) -> int:
             mode=args.mode,
             project=args.project,
             enable_telegram=args.telegram,
+            bot_filter=args.bot,
         )
 
     if args.telegram:
@@ -185,6 +188,7 @@ def main(argv: list[str] | None = None) -> int:
             model=args.model,
             mode=args.mode,
             project=args.project,
+            bot_filter=args.bot,
         )
 
     if args.voice:

@@ -5,9 +5,27 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+from jarvis.brain import build_clean_child_env
 from jarvis.config import Settings
 from jarvis.deploy_guard import check_command, evaluate_hook_payload, is_deploy_intent
 from jarvis.orchestrator import JarvisOrchestrator
+
+
+def test_clean_child_env_strips_personal_secrets() -> None:
+    sample = {
+        "PATH": "/usr/bin",
+        "HOME": "/home/vivek",
+        "TELEGRAM_BOT_TOKEN": "secret-1",
+        "TELEGRAM_CODE_BOT_TOKEN": "secret-2",
+        "HOME_ASSISTANT_TOKEN": "secret-3",
+        "OPENAI_API_KEY": "secret-4",
+    }
+    cleaned = build_clean_child_env(sample, deploy_approved=False)
+    assert cleaned == {"PATH": "/usr/bin", "HOME": "/home/vivek"}
+
+    approved = build_clean_child_env(sample, deploy_approved=True)
+    assert approved["JARVIS_DEPLOY_APPROVED"] == "1"
+    assert "TELEGRAM_BOT_TOKEN" not in approved
 
 
 def test_deploy_guard_blocks_staging_and_prod_commands() -> None:

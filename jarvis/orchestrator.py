@@ -39,10 +39,13 @@ Jarvis Commands:
 class JarvisOrchestrator:
     """Coordinates memory, local commands, deploy guardrails, and the Antigravity brain."""
 
-    def __init__(self, settings: Settings | None = None) -> None:
+    def __init__(self, settings: Settings | None = None, fixed_mode: str | None = None) -> None:
         self.settings = settings or Settings.load()
         self.memory = MemoryStore(self.settings.db_path, self.settings.profile_path)
         self.brain = AntigravityBrain(self.settings, self.memory)
+        self.fixed_mode = fixed_mode
+        if fixed_mode:
+            self.brain.set_mode(fixed_mode)
         self._lock = asyncio.Lock()
         self._pending_deploy: tuple[str, str] | None = None  # (user_text, channel)
 
@@ -118,6 +121,9 @@ class JarvisOrchestrator:
         if cmd == "/mode":
             if not arg:
                 return f"Active mode: {self.brain.mode} (model: {self.brain.model})"
+            if self.fixed_mode and arg.strip().lower() != self.fixed_mode:
+                other = "Jarvis Code" if self.fixed_mode == "assistant" else "Jarvis"
+                return f"This bot is locked to `{self.fixed_mode}` mode. Message **{other}** for `{arg.strip().lower()}` tasks."
             try:
                 new_mode = self.brain.set_mode(arg)
             except ValueError as exc:

@@ -39,6 +39,7 @@ class Settings:
     host: str
     port: int
     telegram_bot_token: str
+    telegram_code_bot_token: str
     telegram_allowed_user_id: str
     home_assistant_url: str
     home_assistant_token: str
@@ -67,6 +68,7 @@ class Settings:
             host=os.environ.get("JARVIS_HOST", "127.0.0.1"),
             port=int(os.environ.get("JARVIS_PORT", "8765")),
             telegram_bot_token=os.environ.get("TELEGRAM_BOT_TOKEN", ""),
+            telegram_code_bot_token=os.environ.get("TELEGRAM_CODE_BOT_TOKEN", ""),
             telegram_allowed_user_id=os.environ.get("TELEGRAM_ALLOWED_USER_ID", ""),
             home_assistant_url=os.environ.get("HOME_ASSISTANT_URL", ""),
             home_assistant_token=os.environ.get("HOME_ASSISTANT_TOKEN", ""),

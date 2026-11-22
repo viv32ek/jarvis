@@ -1,11 +1,11 @@
-"""Free Telegram Bot bridge for Jarvis (Assistant + Code Mode + Deploy Approval buttons)."""
+"""Two-Bot Free Telegram Bridge: Jarvis (Personal) + Jarvis Code (Coding Projects)."""
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import tempfile
 from pathlib import Path
-from typing import Iterable
 
 from jarvis.config import Settings
 from jarvis.orchestrator import JarvisOrchestrator
@@ -55,28 +55,33 @@ def chunk_message(text: str, max_len: int = TELEGRAM_MAX_LEN) -> list[str]:
     return chunks
 
 
-def normalize_telegram_input(text: str, orchestrator: JarvisOrchestrator) -> tuple[str, str | None]:
-    """Handle Telegram-specific shortcuts (`/code <task>`, `/assistant <task>`).
-
-    Returns (prompt_to_run, optional_mode_notice).
-    """
+def normalize_telegram_input(
+    text: str,
+    orchestrator: JarvisOrchestrator,
+    bot_role: str = "personal",
+) -> tuple[str, str | None]:
+    """Handle Telegram shortcuts while respecting dedicated bot roles."""
     stripped = (text or "").strip()
-    if stripped.startswith("/code"):
-        rest = stripped[5:].strip()
-        orchestrator.brain.set_mode("code")
-        if not rest:
-            return "/mode", None
-        return rest, f"[Code Mode · {orchestrator.brain.model}]"
-
-    if stripped.startswith("/assistant"):
-        rest = stripped[10:].strip()
-        orchestrator.brain.set_mode("assistant")
-        if not rest:
-            return "/mode", None
-        return rest, f"[Assistant Mode · {orchestrator.brain.model}]"
-
-    if stripped in ("/start",):
+    if stripped == "/start":
         return "/help", None
+
+    # If the orchestrator is NOT locked to a fixed mode, preserve legacy /code & /assistant shortcuts.
+    if orchestrator.fixed_mode is None:
+        if stripped.startswith("/code"):
+            rest = stripped[5:].strip()
+            orchestrator.brain.set_mode("code")
+            if not rest:
+                return "/mode", None
+            return rest, f"[Code Mode · {orchestrator.brain.model}]"
+        if stripped.startswith("/assistant"):
+            rest = stripped[10:].strip()
+            orchestrator.brain.set_mode("assistant")
+            if not rest:
+                return "/mode", None
+            return rest, f"[Assistant Mode · {orchestrator.brain.model}]"
+
+    if bot_role == "code" and stripped.startswith("/code "):
+        return stripped[6:].strip(), None
 
     return stripped, None
 
@@ -96,8 +101,13 @@ def _transcribe_voice_note(audio_path: Path) -> str:
     return " ".join(seg.text.strip() for seg in segments).strip()
 
 
-def build_telegram_application(orchestrator: JarvisOrchestrator, settings: Settings | None = None):
-    """Build and configure the python-telegram-bot Application."""
+def build_telegram_application(
+    orchestrator: JarvisOrchestrator,
+    settings: Settings | None = None,
+    bot_role: str = "personal",
+    token: str | None = None,
+):
+    """Build and configure one python-telegram-bot Application (`personal` or `code`)."""
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
     from telegram.constants import ChatAction
     from telegram.ext import (
@@ -109,15 +119,21 @@ def build_telegram_application(orchestrator: JarvisOrchestrator, settings: Setti
     )
 
     cfg = settings or orchestrator.settings
-    if not cfg.telegram_bot_token:
+    bot_token = token or (cfg.telegram_code_bot_token if bot_role == "code" else cfg.telegram_bot_token)
+    env_var = "TELEGRAM_CODE_BOT_TOKEN" if bot_role == "code" else "TELEGRAM_BOT_TOKEN"
+    bot_label = "Jarvis Code" if bot_role == "code" else "Jarvis"
+    channel_name = "telegram-code" if bot_role == "code" else "telegram"
+
+    if not bot_token:
         raise RuntimeError(
-            "TELEGRAM_BOT_TOKEN is not set. Add it to /home/vivek/agy/.env (get a free token from @BotFather)."
+            f"{env_var} is not set. Add it to /home/vivek/agy/.env (get a free token from @BotFather)."
         )
 
     allowed_ids = parse_allowed_user_ids(cfg.telegram_allowed_user_id)
     if not allowed_ids:
         logger.warning(
-            "TELEGRAM_ALLOWED_USER_ID is empty! All messages will be rejected until you add your numeric Telegram user ID to .env."
+            "[%s] TELEGRAM_ALLOWED_USER_ID is empty! All messages will be rejected until you add your numeric user ID to .env.",
+            bot_label,
         )
 
     async def _send_reply(update: Update, reply_text: str) -> None:
@@ -142,7 +158,7 @@ def build_telegram_application(orchestrator: JarvisOrchestrator, settings: Setti
         uid = user.id if user else None
         if is_authorized(uid, allowed_ids):
             return True
-        logger.warning("Rejected unauthorized Telegram user_id=%s username=%s", uid, getattr(user, "username", None))
+        logger.warning("[%s] Rejected unauthorized Telegram user_id=%s", bot_label, uid)
         if update.effective_chat is not None:
             await update.effective_chat.send_message(
                 f"Unauthorized. If you are the owner, add `TELEGRAM_ALLOWED_USER_ID={uid}` to `/home/vivek/agy/.env` and restart Jarvis."
@@ -155,9 +171,9 @@ def build_telegram_application(orchestrator: JarvisOrchestrator, settings: Setti
         if not update.message or not update.message.text or not update.effective_chat:
             return
 
-        prompt, notice = normalize_telegram_input(update.message.text, orchestrator)
+        prompt, notice = normalize_telegram_input(update.message.text, orchestrator, bot_role=bot_role)
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
-        reply = await orchestrator.chat(prompt, channel="telegram")
+        reply = await orchestrator.chat(prompt, channel=channel_name)
         if notice:
             reply = f"{notice}\n\n{reply}"
         await _send_reply(update, reply)
@@ -183,7 +199,7 @@ def build_telegram_application(orchestrator: JarvisOrchestrator, settings: Setti
             await update.effective_chat.send_message("Couldn't catch any speech in that voice note.")
             return
 
-        reply = await orchestrator.chat(transcript, channel="telegram-voice")
+        reply = await orchestrator.chat(transcript, channel=f"{channel_name}-voice")
         await _send_reply(update, f"🎙️ _{transcript}_\n\n{reply}")
 
     async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -199,21 +215,68 @@ def build_telegram_application(orchestrator: JarvisOrchestrator, settings: Setti
         if query.data == "deploy:approve":
             if update.effective_chat:
                 await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
-            reply = await orchestrator.chat("/approve", channel="telegram")
+            reply = await orchestrator.chat("/approve", channel=channel_name)
             await _send_reply(update, reply)
         elif query.data == "deploy:deny":
-            reply = await orchestrator.chat("/deny", channel="telegram")
+            reply = await orchestrator.chat("/deny", channel=channel_name)
             await _send_reply(update, reply)
 
-    app = Application.builder().token(cfg.telegram_bot_token).build()
+    app = Application.builder().token(bot_token).build()
     app.add_handler(MessageHandler(filters.TEXT, handle_text))
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
     app.add_handler(CallbackQueryHandler(handle_callback))
     return app
 
 
-def run_telegram_bot(orchestrator: JarvisOrchestrator, settings: Settings | None = None) -> None:
-    """Run the Telegram bot with long polling (no public IP or webhook required)."""
-    app = build_telegram_application(orchestrator, settings=settings)
-    print(f"Jarvis Telegram bot online (mode: {orchestrator.brain.mode}, model: {orchestrator.brain.model}).")
-    app.run_polling()
+def build_telegram_bots(
+    personal_orch: JarvisOrchestrator,
+    code_orch: JarvisOrchestrator,
+    settings: Settings,
+    bot_filter: str = "all",
+) -> list[tuple[str, object]]:
+    """Build configured Telegram bot applications (`personal`, `code`, or both)."""
+    bots: list[tuple[str, object]] = []
+    if bot_filter in ("all", "personal") and settings.telegram_bot_token:
+        bots.append(("personal", build_telegram_application(personal_orch, settings=settings, bot_role="personal")))
+    if bot_filter in ("all", "code") and settings.telegram_code_bot_token:
+        bots.append(("code", build_telegram_application(code_orch, settings=settings, bot_role="code")))
+
+    if not bots:
+        if bot_filter == "code":
+            raise RuntimeError("TELEGRAM_CODE_BOT_TOKEN is not set in /home/vivek/agy/.env.")
+        raise RuntimeError(
+            "No Telegram bot tokens configured. Set TELEGRAM_BOT_TOKEN and/or TELEGRAM_CODE_BOT_TOKEN in /home/vivek/agy/.env."
+        )
+    return bots
+
+
+async def _run_bots_async(bots: list[tuple[str, object]]) -> None:
+    for role, app in bots:
+        await app.initialize()
+        await app.start()
+        if app.updater is not None:
+            await app.updater.start_polling()
+        label = "Jarvis Code" if role == "code" else "Jarvis"
+        print(f"{label} Telegram bot online.")
+    try:
+        await asyncio.Event().wait()
+    finally:
+        for _, app in bots:
+            if app.updater is not None:
+                await app.updater.stop()
+            await app.stop()
+            await app.shutdown()
+
+
+def run_telegram_bots(
+    personal_orch: JarvisOrchestrator,
+    code_orch: JarvisOrchestrator,
+    settings: Settings,
+    bot_filter: str = "all",
+) -> None:
+    """Run one or both Telegram bots concurrently with long polling."""
+    bots = build_telegram_bots(personal_orch, code_orch, settings=settings, bot_filter=bot_filter)
+    try:
+        asyncio.run(_run_bots_async(bots))
+    except KeyboardInterrupt:
+        print("\nTelegram bots stopped.")

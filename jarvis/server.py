@@ -44,34 +44,54 @@ class WorkspaceRequest(BaseModel):
     path: str
 
 
-def create_app(settings: Settings | None = None, enable_telegram: bool = False) -> FastAPI:
-    """Create the FastAPI application with a shared JarvisOrchestrator."""
+def create_app(
+    settings: Settings | None = None,
+    enable_telegram: bool = False,
+    telegram_bot_filter: str = "all",
+) -> FastAPI:
+    """Create the FastAPI application with separate Personal & Code orchestrators."""
     cfg = settings or Settings.load()
-    orchestrator = JarvisOrchestrator(cfg)
+    personal_orch = JarvisOrchestrator(cfg, fixed_mode="assistant")
+    code_orch = JarvisOrchestrator(cfg, fixed_mode="code")
+    active_mode = {"value": "assistant"}
+    active_telegram_roles: list[str] = []
+
+    def current_orchestrator() -> JarvisOrchestrator:
+        return code_orch if active_mode["value"] == "code" else personal_orch
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-        tg_app = None
+        tg_bots: list[tuple[str, Any]] = []
         if enable_telegram:
-            from jarvis.telegram_bot import build_telegram_application
+            from jarvis.telegram_bot import build_telegram_bots
 
-            tg_app = build_telegram_application(orchestrator, settings=cfg)
-            await tg_app.initialize()
-            await tg_app.start()
-            if tg_app.updater is not None:
-                await tg_app.updater.start_polling()
-            print("Telegram bot attached to Jarvis Core Service.")
+            tg_bots = build_telegram_bots(
+                personal_orch,
+                code_orch,
+                settings=cfg,
+                bot_filter=telegram_bot_filter,
+            )
+            for role, tg_app in tg_bots:
+                await tg_app.initialize()
+                await tg_app.start()
+                if tg_app.updater is not None:
+                    await tg_app.updater.start_polling()
+                active_telegram_roles.append(role)
+                label = "Jarvis Code" if role == "code" else "Jarvis"
+                print(f"{label} Telegram bot attached to Core Service.")
         try:
             yield
         finally:
-            if tg_app is not None:
+            for _, tg_app in tg_bots:
                 if tg_app.updater is not None:
                     await tg_app.updater.stop()
                 await tg_app.stop()
                 await tg_app.shutdown()
 
-    app = FastAPI(title="Jarvis Core Service", version="0.1.0", lifespan=lifespan)
-    app.state.orchestrator = orchestrator
+    app = FastAPI(title="Jarvis Core Service", version="0.2.0", lifespan=lifespan)
+    app.state.personal_orchestrator = personal_orch
+    app.state.code_orchestrator = code_orch
+    app.state.orchestrator = personal_orch
     app.state.telegram_enabled = enable_telegram
 
     if WEB_DIR.exists():
@@ -83,32 +103,36 @@ def create_app(settings: Settings | None = None, enable_telegram: bool = False) 
 
     @app.get("/api/health")
     async def health() -> dict[str, Any]:
+        orch = current_orchestrator()
         return {
             "status": "ok",
-            "mode": orchestrator.brain.mode,
-            "model": orchestrator.brain.model,
-            "workspace": str(orchestrator.brain.workspace),
-            "conversation_id": orchestrator.brain.conversation_id,
-            "pending_deploy": orchestrator.pending_deploy,
+            "mode": active_mode["value"],
+            "model": orch.brain.model,
+            "workspace": str(code_orch.brain.workspace),
+            "conversation_id": orch.brain.conversation_id,
+            "pending_deploy": code_orch.pending_deploy,
             "telegram_enabled": enable_telegram,
+            "telegram_bots": active_telegram_roles,
         }
 
     @app.post("/api/mode")
     async def set_mode(req: ModeRequest) -> dict[str, Any]:
-        try:
-            mode = orchestrator.brain.set_mode(req.mode)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        normalized = req.mode.strip().lower()
+        if normalized not in ("assistant", "code"):
+            raise HTTPException(status_code=400, detail="Mode must be 'assistant' or 'code'")
+        active_mode["value"] = normalized
+        orch = current_orchestrator()
+        app.state.orchestrator = orch
         return {
-            "mode": mode,
-            "model": orchestrator.brain.model,
-            "workspace": str(orchestrator.brain.workspace),
+            "mode": active_mode["value"],
+            "model": orch.brain.model,
+            "workspace": str(code_orch.brain.workspace),
         }
 
     @app.post("/api/workspace")
     async def set_workspace(req: WorkspaceRequest) -> dict[str, str]:
         try:
-            ws = orchestrator.brain.set_workspace(req.path)
+            ws = code_orch.brain.set_workspace(req.path)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"workspace": str(ws)}
@@ -118,17 +142,19 @@ def create_app(settings: Settings | None = None, enable_telegram: bool = False) 
         model = req.model.strip()
         if not model:
             raise HTTPException(status_code=400, detail="Model cannot be empty")
-        orchestrator.brain.model = model
-        return {"mode": orchestrator.brain.mode, "model": orchestrator.brain.model}
+        orch = current_orchestrator()
+        orch.brain.model = model
+        return {"mode": active_mode["value"], "model": orch.brain.model}
 
     @app.post("/api/reset")
     async def reset_conversation() -> dict[str, str]:
-        orchestrator.brain.reset_conversation()
-        return {"status": "reset", "mode": orchestrator.brain.mode}
+        orch = current_orchestrator()
+        orch.brain.reset_conversation()
+        return {"status": "reset", "mode": active_mode["value"]}
 
     @app.get("/api/history")
     async def get_history(limit: int = 50, mode: str | None = None) -> dict[str, Any]:
-        msgs = orchestrator.memory.recent_messages(limit=min(max(limit, 1), 200), mode=mode)
+        msgs = personal_orch.memory.recent_messages(limit=min(max(limit, 1), 200), mode=mode)
         return {
             "messages": [
                 {
@@ -145,8 +171,8 @@ def create_app(settings: Settings | None = None, enable_telegram: bool = False) 
 
     @app.get("/api/memory")
     async def get_memory() -> dict[str, Any]:
-        facts = orchestrator.memory.list_facts(limit=50)
-        reminders = orchestrator.memory.list_reminders(include_completed=False)
+        facts = personal_orch.memory.list_facts(limit=50)
+        reminders = personal_orch.memory.list_reminders(include_completed=False)
         return {
             "facts": [
                 {"id": f.id, "content": f.content, "category": f.category, "created_at": f.created_at}
@@ -163,12 +189,12 @@ def create_app(settings: Settings | None = None, enable_telegram: bool = False) 
         content = req.content.strip()
         if not content:
             raise HTTPException(status_code=400, detail="Fact content cannot be empty")
-        fact_id = orchestrator.memory.add_fact(content, category=req.category)
+        fact_id = personal_orch.memory.add_fact(content, category=req.category)
         return {"id": fact_id, "content": content, "category": req.category}
 
     @app.delete("/api/memory/facts/{fact_id}")
     async def delete_fact(fact_id: int) -> dict[str, bool]:
-        ok = orchestrator.memory.delete_fact(fact_id)
+        ok = personal_orch.memory.delete_fact(fact_id)
         if not ok:
             raise HTTPException(status_code=404, detail="Fact not found")
         return {"deleted": True}
@@ -178,12 +204,12 @@ def create_app(settings: Settings | None = None, enable_telegram: bool = False) 
         text = req.text.strip()
         if not text:
             raise HTTPException(status_code=400, detail="Reminder text cannot be empty")
-        rid = orchestrator.memory.add_reminder(text, due_at=req.due_at)
+        rid = personal_orch.memory.add_reminder(text, due_at=req.due_at)
         return {"id": rid, "text": text, "due_at": req.due_at}
 
     @app.post("/api/memory/reminders/{reminder_id}/done")
     async def complete_reminder(reminder_id: int) -> dict[str, bool]:
-        ok = orchestrator.memory.complete_reminder(reminder_id)
+        ok = personal_orch.memory.complete_reminder(reminder_id)
         if not ok:
             raise HTTPException(status_code=404, detail="Reminder not found")
         return {"completed": True}
@@ -193,12 +219,13 @@ def create_app(settings: Settings | None = None, enable_telegram: bool = False) 
         text = req.message.strip()
         if not text:
             raise HTTPException(status_code=400, detail="Message cannot be empty")
-        reply = await orchestrator.chat(text, channel=req.channel)
+        orch = current_orchestrator()
+        reply = await orch.chat(text, channel=req.channel)
         return {
             "reply": reply,
-            "mode": orchestrator.brain.mode,
-            "model": orchestrator.brain.model,
-            "conversation_id": orchestrator.brain.conversation_id,
+            "mode": orch.brain.mode,
+            "model": orch.brain.model,
+            "conversation_id": orch.brain.conversation_id,
         }
 
     @app.websocket("/ws/chat")
@@ -212,7 +239,8 @@ def create_app(settings: Settings | None = None, enable_telegram: bool = False) 
                 if not message:
                     continue
 
-                async for event in orchestrator.chat_stream(message, channel=channel):
+                orch = current_orchestrator()
+                async for event in orch.chat_stream(message, channel=channel):
                     await websocket.send_json(
                         {
                             "kind": event.kind,

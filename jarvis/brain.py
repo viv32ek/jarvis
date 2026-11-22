@@ -36,6 +36,23 @@ MUST ALWAYS pause and ask Vivek for explicit permission before executing.
 
 VALID_MODES = ("assistant", "code")
 
+STRIPPED_ENV_PREFIXES = ("TELEGRAM_", "HOME_ASSISTANT_", "GMAIL_", "JARVIS_", "PENPOT_", "HUB_")
+STRIPPED_ENV_SUFFIXES = ("_TOKEN", "_SECRET", "_API_KEY", "_PASSWORD")
+
+
+def build_clean_child_env(base_env: dict[str, str] | None = None, deploy_approved: bool = False) -> dict[str, str]:
+    """Strip personal/service secrets from `agy` child process environments."""
+    source = base_env if base_env is not None else os.environ
+    cleaned: dict[str, str] = {}
+    for key, val in source.items():
+        upper = key.upper()
+        if upper.startswith(STRIPPED_ENV_PREFIXES) or upper.endswith(STRIPPED_ENV_SUFFIXES):
+            continue
+        cleaned[key] = val
+    if deploy_approved:
+        cleaned["JARVIS_DEPLOY_APPROVED"] = "1"
+    return cleaned
+
 
 @dataclass(frozen=True)
 class BrainEvent:
@@ -212,11 +229,7 @@ class AntigravityBrain:
         if conv_id:
             cmd.extend(["--conversation", conv_id])
 
-        env = os.environ.copy()
-        if deploy_approved:
-            env["JARVIS_DEPLOY_APPROVED"] = "1"
-        else:
-            env.pop("JARVIS_DEPLOY_APPROVED", None)
+        env = build_clean_child_env(deploy_approved=deploy_approved)
 
         proc = await asyncio.create_subprocess_exec(
             *cmd,

@@ -55,3 +55,9 @@ def test_telegram_code_shortcut_and_deploy_gate(tmp_path: Path) -> None:
     back_prompt, _ = normalize_telegram_input("/assistant what's on my reminders?", orch)
     assert orch.brain.mode == "assistant"
     assert back_prompt == "what's on my reminders?"
+
+    # Dedicated fixed-mode bots stay locked to their role
+    personal = JarvisOrchestrator(settings, fixed_mode="assistant")
+    code = JarvisOrchestrator(settings, fixed_mode="code")
+    assert "Jarvis Code" in asyncio.run(personal.chat("/mode code"))
+    assert "Jarvis" in asyncio.run(code.chat("/mode assistant"))
