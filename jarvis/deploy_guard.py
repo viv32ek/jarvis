@@ -55,6 +55,17 @@ DEPLOY_COMMAND_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
             re.IGNORECASE,
         ),
     ),
+    (
+        "Direct AWS ECS staging scaling (use hub-issues lease instead)",
+        re.compile(r"\baws\s+ecs\s+update-service\b", re.IGNORECASE),
+    ),
+    (
+        "Direct hub-app database/socket/auth access (use hub-issues CLI instead)",
+        re.compile(
+            r"hub-app/data/(issues\.db|hub\.db|auth\.json|issue-clients\.json|issues\.sock)",
+            re.IGNORECASE,
+        ),
+    ),
 ]
 
 DEPLOY_INTENT_PATTERN = re.compile(

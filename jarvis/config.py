@@ -43,6 +43,9 @@ class Settings:
     telegram_allowed_user_id: str
     home_assistant_url: str
     home_assistant_token: str
+    hub_app_dir: Path
+    hub_app_url: str
+    hub_projects: dict[str, str]
 
     @classmethod
     def load(cls, root_dir: Path = ROOT_DIR) -> "Settings":
@@ -72,4 +75,20 @@ class Settings:
             telegram_allowed_user_id=os.environ.get("TELEGRAM_ALLOWED_USER_ID", ""),
             home_assistant_url=os.environ.get("HOME_ASSISTANT_URL", ""),
             home_assistant_token=os.environ.get("HOME_ASSISTANT_TOKEN", ""),
+            hub_app_dir=Path(os.environ.get("HUB_APP_DIR", "/home/vivek/git/hub-app")).expanduser(),
+            hub_app_url=os.environ.get("HUB_APP_URL", "http://127.0.0.1:3100").rstrip("/"),
+            hub_projects=_parse_project_map(os.environ.get("JARVIS_HUB_PROJECTS", "UNI=myschedlr-final")),
         )
+
+
+def _parse_project_map(raw: str) -> dict[str, str]:
+    mapping: dict[str, str] = {}
+    for pair in (raw or "").split(","):
+        if "=" not in pair:
+            continue
+        key, val = pair.split("=", 1)
+        k = key.strip().upper()
+        v = val.strip()
+        if k and v:
+            mapping[k] = v
+    return mapping

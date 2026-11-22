@@ -10,6 +10,7 @@ from jarvis.config import Settings
 from jarvis.connectors.gmail import GmailClient
 from jarvis.connectors.home_assistant import HomeAssistantClient
 from jarvis.connectors.homelab import get_system_status
+from jarvis.connectors.hub_app import HubAppClient, project_prefix_from_key
 from jarvis.deploy_guard import is_deploy_intent
 from jarvis.memory import MemoryStore
 from jarvis.scheduler import build_morning_briefing
@@ -18,10 +19,12 @@ HELP_TEXT = """\
 Jarvis Commands:
   /mode [assistant|code]  Show or switch mode (code uses Gemini 4 Neon in auto mode)
   /project [path]         Show or set active workspace directory for Code Mode
+  /work <ISSUE-KEY>       Load a hub-app issue (e.g. UNI-42), auto-select repo, and work on it
+  /hub [dashboard|decisions|qa|issue <KEY>|search <q>|lease]  Query hub-app tracker
   /approve                Approve a pending staging/production deployment request
   /deny                   Cancel a pending staging/production deployment request
   /status                 Show local Linux server & Docker status
-  /briefing               Generate your morning briefing (system, reminders, HA, Gmail)
+  /briefing               Generate your morning briefing (system, hub-app, reminders, HA, Gmail)
   /ha [status|on|off|toggle <entity>]  Control Home Assistant locally
   /gmail [unread|search <q>]           Check Gmail via free direct OAuth
   /remember <fact>        Save a long-term fact to memory
@@ -71,6 +74,30 @@ class JarvisOrchestrator:
 
         if cmd == "/briefing":
             return build_morning_briefing(self.settings, self.memory)
+
+        if cmd == "/hub":
+            hub_client = "jarvis-code" if self.brain.mode == "code" else "jarvis"
+            hub = HubAppClient(self.settings.hub_app_dir, self.settings.hub_app_url, client_name=hub_client)
+            sub = arg.split(maxsplit=1)
+            action = sub[0].lower() if sub else "dashboard"
+            rest = sub[1].strip() if len(sub) > 1 else ""
+            if action == "dashboard":
+                return hub.dashboard_summary(rest or None)
+            if action == "decisions":
+                return hub.decisions_summary(rest or None)
+            if action == "qa":
+                return hub.qa_ready_summary(rest or None)
+            if action == "issue" and rest:
+                return hub.issue_summary(rest)
+            if action == "search" and rest:
+                return hub.search_summary(rest)
+            if action == "lease":
+                return hub.lease_summary()
+            return "Usage: /hub [dashboard [P] | decisions [P] | qa [P] | issue <KEY> | search <text> | lease]"
+
+        if cmd == "/work":
+            # Handled asynchronously in chat_stream so it can load the issue and run Code Mode.
+            return None
 
         if cmd == "/ha":
             ha = HomeAssistantClient(self.settings.home_assistant_url, self.settings.home_assistant_token)
@@ -205,6 +232,41 @@ class JarvisOrchestrator:
             user_text, channel = self._pending_deploy
             self._pending_deploy = None
             deploy_approved = True
+        elif stripped.lower().startswith("/work"):
+            parts = stripped.split(maxsplit=2)
+            if len(parts) < 2:
+                msg = "Usage: /work <ISSUE-KEY> [optional extra instructions]  (e.g. /work UNI-42)"
+                yield BrainEvent(kind="delta", text=msg)
+                yield BrainEvent(kind="result", text=msg)
+                return
+            if self.fixed_mode == "assistant":
+                msg = "Use **Jarvis Code** for `/work <KEY>` coding tasks."
+                yield BrainEvent(kind="delta", text=msg)
+                yield BrainEvent(kind="result", text=msg)
+                return
+            issue_key = parts[1].strip().upper()
+            extra = parts[2].strip() if len(parts) > 2 else ""
+            if self.brain.mode != "code":
+                self.brain.set_mode("code")
+
+            prefix = project_prefix_from_key(issue_key)
+            mapped_repo = self.settings.hub_projects.get(prefix)
+            if mapped_repo:
+                try:
+                    self.brain.set_workspace(mapped_repo)
+                except ValueError as exc:
+                    err = f"Mapped workspace for `{prefix}` (`{mapped_repo}`) not found: {exc}"
+                    yield BrainEvent(kind="delta", text=err)
+                    yield BrainEvent(kind="result", text=err)
+                    return
+
+            hub = HubAppClient(self.settings.hub_app_dir, self.settings.hub_app_url, client_name="jarvis-code")
+            ok, brief = hub.build_work_brief(issue_key)
+            if not ok:
+                yield BrainEvent(kind="delta", text=brief)
+                yield BrainEvent(kind="result", text=brief)
+                return
+            user_text = brief + (f"\n\nExtra instructions from Vivek: {extra}" if extra else "")
         else:
             command_reply = self.handle_command(user_text)
             if command_reply is not None:

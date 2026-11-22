@@ -40,7 +40,11 @@ STRIPPED_ENV_PREFIXES = ("TELEGRAM_", "HOME_ASSISTANT_", "GMAIL_", "JARVIS_", "P
 STRIPPED_ENV_SUFFIXES = ("_TOKEN", "_SECRET", "_API_KEY", "_PASSWORD")
 
 
-def build_clean_child_env(base_env: dict[str, str] | None = None, deploy_approved: bool = False) -> dict[str, str]:
+def build_clean_child_env(
+    base_env: dict[str, str] | None = None,
+    deploy_approved: bool = False,
+    hub_client: str | None = None,
+) -> dict[str, str]:
     """Strip personal/service secrets from `agy` child process environments."""
     source = base_env if base_env is not None else os.environ
     cleaned: dict[str, str] = {}
@@ -51,6 +55,8 @@ def build_clean_child_env(base_env: dict[str, str] | None = None, deploy_approve
         cleaned[key] = val
     if deploy_approved:
         cleaned["JARVIS_DEPLOY_APPROVED"] = "1"
+    if hub_client:
+        cleaned["HUB_ISSUES_CLIENT"] = hub_client
     return cleaned
 
 
@@ -229,7 +235,8 @@ class AntigravityBrain:
         if conv_id:
             cmd.extend(["--conversation", conv_id])
 
-        env = build_clean_child_env(deploy_approved=deploy_approved)
+        hub_client = "jarvis-code" if self._mode == "code" else "jarvis"
+        env = build_clean_child_env(deploy_approved=deploy_approved, hub_client=hub_client)
 
         proc = await asyncio.create_subprocess_exec(
             *cmd,

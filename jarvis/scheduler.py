@@ -8,6 +8,7 @@ from jarvis.config import Settings
 from jarvis.connectors.gmail import GmailClient
 from jarvis.connectors.home_assistant import HomeAssistantClient
 from jarvis.connectors.homelab import get_system_status
+from jarvis.connectors.hub_app import HubAppClient
 from jarvis.memory import MemoryStore
 
 
@@ -17,6 +18,10 @@ def build_morning_briefing(settings: Settings, memory: MemoryStore) -> str:
     sections = [f"Good morning Vivek ({now})"]
 
     sections.append("System Status:\n" + get_system_status())
+
+    hub = HubAppClient(settings.hub_app_dir, settings.hub_app_url, client_name="jarvis")
+    if hub.is_available:
+        sections.append("Hub-App Snapshot:\n" + hub.briefing_snapshot())
 
     reminders = memory.list_reminders(include_completed=False)
     if reminders:
