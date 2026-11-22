@@ -28,6 +28,7 @@ class Settings:
     root_dir: Path
     data_dir: Path
     memory_dir: Path
+    workspaces_dir: Path
     db_path: Path
     profile_path: Path
     agy_bin: str
@@ -47,12 +48,15 @@ class Settings:
         _load_dotenv(root_dir / ".env")
         data_dir = root_dir / "data"
         memory_dir = root_dir / "memory"
+        workspaces_dir = root_dir / "workspaces"
         data_dir.mkdir(parents=True, exist_ok=True)
         memory_dir.mkdir(parents=True, exist_ok=True)
+        workspaces_dir.mkdir(parents=True, exist_ok=True)
         return cls(
             root_dir=root_dir,
             data_dir=data_dir,
             memory_dir=memory_dir,
+            workspaces_dir=workspaces_dir,
             db_path=data_dir / "jarvis.db",
             profile_path=memory_dir / "profile.md",
             agy_bin=os.environ.get("JARVIS_AGY_BIN", "agy"),

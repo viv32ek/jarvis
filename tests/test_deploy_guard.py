@@ -72,12 +72,16 @@ def test_orchestrator_deploy_gate_and_workspace_isolation(tmp_path: Path) -> Non
     orch = JarvisOrchestrator(settings)
     orch.brain.set_mode("code")
 
-    # Separate conversation keys per workspace
+    # Separate conversation keys per workspace + short-name lookup inside workspaces/
     orch.brain.set_workspace(repo_a)
     key_a = orch.brain._conv_state_key
     orch.brain.set_workspace(repo_b)
     key_b = orch.brain._conv_state_key
     assert key_a != key_b
+
+    ws_repo = settings.workspaces_dir / "sample-app"
+    ws_repo.mkdir()
+    assert orch.brain.set_workspace("sample-app") == ws_repo.resolve()
 
     # Staging deploy intent pauses and requires /approve or /deny
     assert is_deploy_intent("Please deploy the latest build to staging") is True

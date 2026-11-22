@@ -65,6 +65,7 @@ def _serve(
     model: str | None,
     mode: str | None,
     project: str | None,
+    enable_telegram: bool = False,
 ) -> int:
     try:
         import uvicorn
@@ -76,7 +77,7 @@ def _serve(
         )
         return 1
 
-    app = create_app(settings)
+    app = create_app(settings, enable_telegram=enable_telegram)
     orch = app.state.orchestrator
     if mode:
         orch.brain.set_mode(mode)
@@ -84,9 +85,69 @@ def _serve(
         orch.brain.set_workspace(project)
     if model:
         orch.brain.model = model
-    print(f"Starting Jarvis Core Service + Web UI at http://{host}:{port} (mode: {orch.brain.mode}, model: {orch.brain.model})")
+    tg_note = " + Telegram" if enable_telegram else ""
+    print(
+        f"Starting Jarvis Core Service + Web UI{tg_note} at http://{host}:{port} "
+        f"(mode: {orch.brain.mode}, model: {orch.brain.model})"
+    )
     uvicorn.run(app, host=host, port=port, log_level="info")
     return 0
+
+
+def _run_telegram(
+    settings: Settings,
+    model: str | None,
+    mode: str | None,
+    project: str | None,
+) -> int:
+    try:
+        from jarvis.telegram_bot import run_telegram_bot
+    except ImportError as exc:
+        sys.stderr.write(
+            f"Telegram dependencies not installed ({exc}).\n"
+            "Run: uv pip install --python .venv/bin/python -e '.[telegram]'\n"
+        )
+        return 1
+
+    orch = JarvisOrchestrator(settings)
+    if mode:
+        orch.brain.set_mode(mode)
+    if project:
+        orch.brain.set_workspace(project)
+    if model:
+        orch.brain.model = model
+
+    try:
+        run_telegram_bot(orch, settings=settings)
+    except RuntimeError as exc:
+        sys.stderr.write(f"Telegram bot error: {exc}\n")
+        return 1
+    return 0
+
+
+def _run_voice(
+    settings: Settings,
+    model: str | None,
+    mode: str | None,
+    project: str | None,
+    push_to_talk: bool,
+    api_url: str | None,
+) -> int:
+    from jarvis.voice import VoiceConfig, VoiceDaemon
+
+    cfg = VoiceConfig(api_url=api_url or "")
+    orch = None
+    if not cfg.api_url:
+        orch = JarvisOrchestrator(settings)
+        if mode:
+            orch.brain.set_mode(mode)
+        if project:
+            orch.brain.set_workspace(project)
+        if model:
+            orch.brain.model = model
+
+    daemon = VoiceDaemon(orchestrator=orch, config=cfg, settings=settings)
+    return asyncio.run(daemon.run(push_to_talk=push_to_talk))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -97,6 +158,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--model", help="Override the Antigravity model (e.g. gemini-4-neon-medium)")
     parser.add_argument("--reset", action="store_true", help="Reset conversation state before running")
     parser.add_argument("--serve", action="store_true", help="Start the FastAPI Core Service + Local Web UI")
+    parser.add_argument("--telegram", action="store_true", help="Start the free Telegram bot bridge")
+    parser.add_argument("--voice", action="store_true", help="Start the local hands-free Voice Daemon")
+    parser.add_argument("--push-to-talk", action="store_true", help="Use Enter-to-speak instead of wake word with --voice")
+    parser.add_argument("--api-url", help="Connect --voice to a running Core Service (e.g. http://127.0.0.1:8765)")
     parser.add_argument("--host", help="Host to bind when using --serve (default from JARVIS_HOST)")
     parser.add_argument("--port", type=int, help="Port to bind when using --serve (default from JARVIS_PORT)")
     args = parser.parse_args(argv)
@@ -111,6 +176,25 @@ def main(argv: list[str] | None = None) -> int:
             model=args.model,
             mode=args.mode,
             project=args.project,
+            enable_telegram=args.telegram,
+        )
+
+    if args.telegram:
+        return _run_telegram(
+            settings,
+            model=args.model,
+            mode=args.mode,
+            project=args.project,
+        )
+
+    if args.voice:
+        return _run_voice(
+            settings,
+            model=args.model,
+            mode=args.mode,
+            project=args.project,
+            push_to_talk=args.push_to_talk,
+            api_url=args.api_url,
         )
 
     orchestrator = JarvisOrchestrator(settings)

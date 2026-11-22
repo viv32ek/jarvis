@@ -7,8 +7,12 @@ from typing import AsyncIterator
 
 from jarvis.brain import AntigravityBrain, BrainEvent
 from jarvis.config import Settings
+from jarvis.connectors.gmail import GmailClient
+from jarvis.connectors.home_assistant import HomeAssistantClient
+from jarvis.connectors.homelab import get_system_status
 from jarvis.deploy_guard import is_deploy_intent
 from jarvis.memory import MemoryStore
+from jarvis.scheduler import build_morning_briefing
 
 HELP_TEXT = """\
 Jarvis Commands:
@@ -16,6 +20,10 @@ Jarvis Commands:
   /project [path]         Show or set active workspace directory for Code Mode
   /approve                Approve a pending staging/production deployment request
   /deny                   Cancel a pending staging/production deployment request
+  /status                 Show local Linux server & Docker status
+  /briefing               Generate your morning briefing (system, reminders, HA, Gmail)
+  /ha [status|on|off|toggle <entity>]  Control Home Assistant locally
+  /gmail [unread|search <q>]           Check Gmail via free direct OAuth
   /remember <fact>        Save a long-term fact to memory
   /facts                  List remembered facts
   /forget <id>            Delete a remembered fact by ID
@@ -54,6 +62,47 @@ class JarvisOrchestrator:
 
         if cmd == "/help":
             return HELP_TEXT.strip()
+
+        if cmd == "/status":
+            return "Server Status:\n" + get_system_status()
+
+        if cmd == "/briefing":
+            return build_morning_briefing(self.settings, self.memory)
+
+        if cmd == "/ha":
+            ha = HomeAssistantClient(self.settings.home_assistant_url, self.settings.home_assistant_token)
+            try:
+                sub = arg.split()
+                if not sub or sub[0].lower() == "status":
+                    return ha.summary()
+                action = sub[0].lower()
+                if action in ("on", "off", "toggle") and len(sub) >= 2:
+                    entity = sub[1]
+                    if action == "on":
+                        ha.turn_on(entity)
+                    elif action == "off":
+                        ha.turn_off(entity)
+                    else:
+                        ha.toggle(entity)
+                    return f"Home Assistant: {action} `{entity}` succeeded."
+                return "Usage: /ha [status | on <entity_id> | off <entity_id> | toggle <entity_id>]"
+            except RuntimeError as exc:
+                return str(exc)
+
+        if cmd == "/gmail":
+            gmail = GmailClient(self.settings.root_dir / "credentials.json", self.settings.root_dir / "token.json")
+            try:
+                sub = arg.split(maxsplit=1)
+                if not sub or sub[0].lower() == "unread":
+                    return gmail.unread_summary()
+                if sub[0].lower() == "search" and len(sub) == 2:
+                    msgs = gmail.search(query=sub[1], max_results=8)
+                    if not msgs:
+                        return f"No emails matching `{sub[1]}`."
+                    return "\n".join(f"- **{m['subject']}** — {m['from']}" for m in msgs)
+                return "Usage: /gmail [unread | search <query>]"
+            except RuntimeError as exc:
+                return str(exc)
 
         if cmd == "/deny":
             if self._pending_deploy is None:

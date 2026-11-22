@@ -137,7 +137,15 @@ class AntigravityBrain:
         return self._workspace
 
     def set_workspace(self, path: str | Path) -> Path:
-        resolved = Path(path).expanduser().resolve()
+        raw = Path(path).expanduser()
+        if not raw.is_absolute():
+            candidate = (self.settings.workspaces_dir / raw).resolve()
+            if candidate.exists() and candidate.is_dir():
+                resolved = candidate
+            else:
+                resolved = raw.resolve()
+        else:
+            resolved = raw.resolve()
         if not resolved.exists() or not resolved.is_dir():
             raise ValueError(f"Workspace directory does not exist: {resolved}")
         self._workspace = resolved

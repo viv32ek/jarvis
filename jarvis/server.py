@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, AsyncIterator
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
@@ -43,11 +44,35 @@ class WorkspaceRequest(BaseModel):
     path: str
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(settings: Settings | None = None, enable_telegram: bool = False) -> FastAPI:
     """Create the FastAPI application with a shared JarvisOrchestrator."""
-    app = FastAPI(title="Jarvis Core Service", version="0.1.0")
-    orchestrator = JarvisOrchestrator(settings or Settings.load())
+    cfg = settings or Settings.load()
+    orchestrator = JarvisOrchestrator(cfg)
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        tg_app = None
+        if enable_telegram:
+            from jarvis.telegram_bot import build_telegram_application
+
+            tg_app = build_telegram_application(orchestrator, settings=cfg)
+            await tg_app.initialize()
+            await tg_app.start()
+            if tg_app.updater is not None:
+                await tg_app.updater.start_polling()
+            print("Telegram bot attached to Jarvis Core Service.")
+        try:
+            yield
+        finally:
+            if tg_app is not None:
+                if tg_app.updater is not None:
+                    await tg_app.updater.stop()
+                await tg_app.stop()
+                await tg_app.shutdown()
+
+    app = FastAPI(title="Jarvis Core Service", version="0.1.0", lifespan=lifespan)
     app.state.orchestrator = orchestrator
+    app.state.telegram_enabled = enable_telegram
 
     if WEB_DIR.exists():
         app.mount("/static", StaticFiles(directory=str(WEB_DIR)), name="static")
@@ -65,6 +90,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "workspace": str(orchestrator.brain.workspace),
             "conversation_id": orchestrator.brain.conversation_id,
             "pending_deploy": orchestrator.pending_deploy,
+            "telegram_enabled": enable_telegram,
         }
 
     @app.post("/api/mode")

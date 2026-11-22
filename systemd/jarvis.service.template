@@ -1,0 +1,15 @@
+[Unit]
+Description=Jarvis Self-Hosted Personal & Code Assistant (Web UI + Telegram)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/vivek/agy
+ExecStart=/home/vivek/agy/.venv/bin/python -m jarvis --serve --telegram --host 0.0.0.0 --port 8765
+Restart=on-failure
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target
